@@ -1,0 +1,120 @@
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
+
+/* VS Code-like IDE styles */
+.vscode-ide {
+  display: flex;
+  height: 100vh;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Segoe UI', 'Fira Mono', 'monospace', sans-serif;
+}
+.vscode-sidebar {
+  width: 48px;
+  background: #21252b;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 12px;
+  border-right: 1px solid #333;
+}
+.vscode-sidebar-icon {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+.vscode-sidebar-icon:hover {
+  background: #2c313a;
+}
+.vscode-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.vscode-topbar {
+  height: 40px;
+  background: #2c313a;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid #333;
+}
+.vscode-title {
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+.vscode-toolbar {
+  display: flex;
+  gap: 8px;
+}
+.vscode-editor-panel {
+  flex: 1;
+  border-bottom: 1px solid #333;
+}
+.vscode-output-panel {
+  height: 120px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 8px 16px;
+  font-size: 15px;
+  overflow-y: auto;
+}
+.vscode-output-title {
+  font-weight: 500;
+  margin-bottom: 4px;
+  color: #569cd6;
+}
+.vscode-output-text {
+  font-family: 'Fira Mono', 'monospace';
+  margin: 0;
+  white-space: pre-wrap;
+}
