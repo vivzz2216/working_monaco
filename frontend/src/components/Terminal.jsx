@@ -9,6 +9,17 @@ const TerminalComponent = ({ containerId, isConnected }) => {
   const terminal = useRef(null);
   const fitAddon = useRef(null);
   const websocket = useRef(null);
+  
+  // Shared resize function using useCallback
+  const sendResize = React.useCallback(() => {
+    if (websocket.current && websocket.current.readyState === WebSocket.OPEN && terminal.current) {
+      const cols = terminal.current.cols;
+      const rows = terminal.current.rows;
+      const resizeMessage = JSON.stringify({ type: 'resize', cols, rows });
+      console.log('Sending resize:', resizeMessage);
+      websocket.current.send(resizeMessage);
+    }
+  }, []);
 
   useEffect(() => {
     if (!terminalRef.current) return;
@@ -47,19 +58,15 @@ const TerminalComponent = ({ containerId, isConnected }) => {
       convertEol: true,
       disableStdin: false,
       allowTransparency: false,
-      allowProposedApi: true,
       cols: 80,
       rows: 24,
-      logLevel: 'warn', // Reduce xterm.js logging
+      logLevel: 'warn',
       cursorInactiveStyle: 'block',
       fastScrollModifier: 'alt',
       macOptionIsMeta: false,
       rightClickSelectsWord: true,
-      // Enable proper key handling
       altClickMovesCursor: false,
-      wordSeparator: ' ()[]{}\'"`<>|&;',
-      // Ensure proper line feed handling
-      convertEol: true
+      wordSeparator: ' ()[]{}\'"`<>|&;'
     });
 
     // Add addons
@@ -105,46 +112,10 @@ const TerminalComponent = ({ containerId, isConnected }) => {
 
     // Handle terminal input
     terminal.current.onData((data) => {
-      console.log('Terminal input received:', data, 'WebSocket state:', websocket.current?.readyState);
-      
-      // Handle Enter key specifically
-      if (data === '\r' || data === '\n' || data === '\r\n') {
-        console.log('Enter key pressed, sending to WebSocket');
-        if (websocket.current && websocket.current.readyState === WebSocket.OPEN) {
-          websocket.current.send('\r');
-          console.log('Enter key sent to WebSocket');
-        } else {
-          console.log('WebSocket not ready for Enter key, state:', websocket.current?.readyState);
-          // Echo the newline locally
-          if (terminal.current) {
-            terminal.current.write('\r\n');
-          }
-        }
-        return;
-      }
-      
       if (websocket.current && websocket.current.readyState === WebSocket.OPEN) {
-        console.log('Sending to WebSocket:', data);
         websocket.current.send(data);
-      } else {
-        console.log('WebSocket not ready, state:', websocket.current?.readyState);
-        // Echo input locally if WebSocket is not ready
-        if (terminal.current) {
-          terminal.current.write(data);
-        }
       }
     });
-
-    // Handle terminal resize
-    const sendResize = () => {
-      if (websocket.current && websocket.current.readyState === WebSocket.OPEN && terminal.current) {
-        const cols = terminal.current.cols;
-        const rows = terminal.current.rows;
-        const resizeMessage = JSON.stringify({ type: 'resize', cols, rows });
-        console.log('Sending resize:', resizeMessage);
-        websocket.current.send(resizeMessage);
-      }
-    };
 
     // Handle window resize
     const handleResize = () => {
@@ -191,8 +162,9 @@ const TerminalComponent = ({ containerId, isConnected }) => {
 
     // Connect to WebSocket with retry logic
     const connectWebSocket = () => {
-      // Use the correct WebSocket URL
-      const wsUrl = `ws://localhost:8000/ws/term/${containerId}`;
+      // Use proxy-compatible WebSocket URL for Replit
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProtocol}//${window.location.host}/ws/term/${containerId}`;
       console.log('Connecting to WebSocket:', wsUrl);
       
       // Close existing connection if any
@@ -219,11 +191,6 @@ const TerminalComponent = ({ containerId, isConnected }) => {
         websocket.current.onopen = () => {
         console.log('Terminal WebSocket connected - state:', websocket.current.readyState);
         if (terminal.current) {
-          // Write welcome message and prompt
-          terminal.current.write('\r\n\x1b[32m✓ Terminal connected to container\x1b[0m\r\n');
-          terminal.current.write('\x1b[36mType commands to interact with your Python environment\x1b[0m\r\n');
-          terminal.current.write('\x1b[32m$ \x1b[0m');
-          
           // Enable input
           terminal.current.options.disableStdin = false;
           
@@ -234,13 +201,6 @@ const TerminalComponent = ({ containerId, isConnected }) => {
           
           // Focus the terminal to ensure it can receive input
           terminal.current.focus();
-          // Ensure terminal is ready for input
-          setTimeout(() => {
-            if (terminal.current) {
-              terminal.current.focus();
-              terminal.current.options.disableStdin = false;
-            }
-          }, 100);
         }
       };
 

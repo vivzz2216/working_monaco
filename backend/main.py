@@ -204,6 +204,13 @@ async def websocket_terminal(websocket: WebSocket, container_id: str):
             
             # Set master fd to non-blocking
             fcntl.fcntl(master_fd, fcntl.F_SETFL, os_module.O_NONBLOCK)
+            
+            # Set initial terminal size
+            import struct
+            import termios
+            # Default size: 24 rows x 80 cols
+            winsize = struct.pack('HHHH', 24, 80, 0, 0)
+            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
         else:
             # Windows fallback (no PTY support)
             process = subprocess.Popen(
@@ -221,12 +228,6 @@ async def websocket_terminal(websocket: WebSocket, container_id: str):
                 }
             )
             master_fd = None
-        
-        # Send welcome message
-        welcome_msg = f"Web IDE Terminal - Working directory: {workspace_dir}\r\n"
-        if (workspace_dir / "venv").exists():
-            welcome_msg += "Virtual environment available. Activate with: source venv/bin/activate\r\n"
-        await websocket.send_text(welcome_msg)
         
         # Handle bidirectional communication
         async def read_from_process():
@@ -285,8 +286,17 @@ async def websocket_terminal(websocket: WebSocket, container_id: str):
                     try:
                         resize_data = json.loads(data)
                         if resize_data.get('type') == 'resize':
-                            print(f"Resize request: {resize_data.get('cols')}x{resize_data.get('rows')}")
-                            # TODO: Implement terminal resize with TIOCSWINSZ
+                            cols = resize_data.get('cols', 80)
+                            rows = resize_data.get('rows', 24)
+                            print(f"Resize request: {cols}x{rows}")
+                            
+                            # Implement terminal resize with TIOCSWINSZ
+                            if master_fd is not None and platform.system() != "Windows":
+                                import struct
+                                import termios
+                                import fcntl
+                                winsize = struct.pack('HHHH', rows, cols, 0, 0)
+                                fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
                             continue
                     except (json.JSONDecodeError, KeyError):
                         pass
