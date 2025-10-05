@@ -116,3 +116,8 @@ celerybeat.pid
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Replit
+.pythonlibs/
+pyproject.toml
+uv.lock

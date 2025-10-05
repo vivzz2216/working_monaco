@@ -13,12 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-# Windows-specific imports
-if platform.system() == "Windows":
-    import msvcrt
-    import ctypes
-    from ctypes import wintypes
-else:
+# Platform-specific imports for PTY
+if platform.system() != "Windows":
     import pty
     import tty
     import select
@@ -37,52 +33,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Docker client using subprocess (more reliable on Windows)
-def check_docker_available():
-    """Check if Docker is available using subprocess"""
-    try:
-        result = subprocess.run(['docker', '--version'], 
-                              capture_output=True, text=True, timeout=10)
-        if result.returncode == 0:
-            print("Docker is available")
-            return True
-        else:
-            print(f"Docker check failed: {result.stderr}")
-            return False
-    except Exception as e:
-        print(f"Docker check error: {e}")
-        return False
-
-def run_docker_command(cmd, **kwargs):
-    """Run Docker command using subprocess"""
-    try:
-        result = subprocess.run(['docker'] + cmd, 
-                              capture_output=True, text=True, timeout=60, **kwargs)
-        return result
-    except subprocess.TimeoutExpired:
-        print(f"Docker command timed out: {' '.join(cmd)}")
-        return None
-    except Exception as e:
-        print(f"Docker command error: {e}")
-        return None
-
-# Check Docker availability
-docker_available = check_docker_available()
-
-# Base directory for sandboxes (Windows compatible)
+# Base directory for sandboxes (Replit compatible)
 import tempfile
 SANDBOX_BASE = Path(tempfile.gettempdir()) / "web_ide_sandboxes"
 SANDBOX_BASE.mkdir(exist_ok=True)
 
-# Store active containers
-active_containers = {}
+# Store active processes (instead of containers)
+active_processes = {}
 
 @app.get("/")
 async def root():
-    docker_status = "available" if docker_available else "unavailable"
     return {
-        "message": "Web IDE Python Backend is running",
-        "docker_status": docker_status
+        "message": "Web IDE Python Backend is running (Replit mode)",
+        "mode": "local_subprocess"
     }
 
 @app.post("/api/projects")
@@ -121,10 +84,7 @@ async def upload_project(project_id: str, file: UploadFile = File(...)):
 
 @app.post("/api/projects/{project_id}/start")
 async def start_container(project_id: str):
-    """Start Docker container with Python environment"""
-    if not docker_available:
-        raise HTTPException(status_code=503, detail="Docker is not available. Please ensure Docker is running.")
-    
+    """Start Python environment locally (no Docker needed)"""
     project_dir = SANDBOX_BASE / project_id
     workspace_dir = project_dir / "workspace"
     
@@ -132,66 +92,58 @@ async def start_container(project_id: str):
         raise HTTPException(status_code=404, detail="Workspace not found. Upload a project first.")
     
     try:
-        # Create container using subprocess
-        container_name = f"web-ide-{project_id}"
+        # Setup Python virtual environment locally
+        await setup_python_environment_local(workspace_dir)
         
-        # Run container
-        cmd = [
-            "run", "-d",
-            "--name", container_name,
-            "--workdir", "/home/dev/workspace",
-            "-v", f"{workspace_dir}:/home/dev/workspace:rw",
-            "--user", "1000:1000",
-            "--memory", "2g",
-            "--security-opt", "no-new-privileges",
-            "-e", "PYTHONUNBUFFERED=1",
-            "-e", "PATH=/home/dev/workspace/venv/bin:$PATH",
-            "python:3.11-slim",
-            "/usr/local/bin/python3", "-c", "import time; time.sleep(999999)"
-        ]
-        
-        result = run_docker_command(cmd)
-        if not result or result.returncode != 0:
-            raise Exception(f"Failed to create container: {result.stderr if result else 'Unknown error'}")
-        
-        container_id = result.stdout.strip()
-        active_containers[project_id] = container_id
-        
-        # Setup Python environment
-        await setup_python_environment_subprocess(container_id)
+        # Generate a pseudo container ID for compatibility
+        pseudo_container_id = f"local-{project_id}"
+        active_processes[project_id] = pseudo_container_id
         
         return {
             "status": "started",
-            "container_id": container_id,
+            "container_id": pseudo_container_id,
             "project_id": project_id
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start container: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to start environment: {str(e)}")
 
-async def setup_python_environment_subprocess(container_id):
-    """Setup Python virtual environment and install dependencies using subprocess"""
+async def setup_python_environment_local(workspace_dir: Path):
+    """Setup Python virtual environment locally and install dependencies"""
     try:
-        # Create virtual environment
-        cmd = ["exec", container_id, "python3", "-m", "venv", "/home/dev/workspace/venv"]
-        result = run_docker_command(cmd)
+        venv_dir = workspace_dir / "venv"
         
-        if not result or result.returncode != 0:
-            print(f"Failed to create venv: {result.stderr if result else 'Unknown error'}")
-            return
+        # Create virtual environment if it doesn't exist
+        if not venv_dir.exists():
+            result = subprocess.run(
+                ["python3", "-m", "venv", str(venv_dir)],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode != 0:
+                print(f"Failed to create venv: {result.stderr}")
+                return
         
         # Check if requirements.txt exists and install dependencies
-        cmd = ["exec", container_id, "test", "-f", "/home/dev/workspace/requirements.txt"]
-        result = run_docker_command(cmd)
-        
-        if result and result.returncode == 0:
-            # Install requirements
-            cmd = ["exec", container_id, "bash", "-c", 
-                   "source /home/dev/workspace/venv/bin/activate && pip install -r /home/dev/workspace/requirements.txt"]
-            result = run_docker_command(cmd)
+        requirements_file = workspace_dir / "requirements.txt"
+        if requirements_file.exists():
+            # Get pip path based on platform
+            if platform.system() == "Windows":
+                pip_path = venv_dir / "Scripts" / "pip"
+            else:
+                pip_path = venv_dir / "bin" / "pip"
             
-            if not result or result.returncode != 0:
-                print(f"Failed to install requirements: {result.stderr if result else 'Unknown error'}")
+            result = subprocess.run(
+                [str(pip_path), "install", "-r", str(requirements_file)],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if result.returncode != 0:
+                print(f"Failed to install requirements: {result.stderr}")
         
         print("Python environment setup completed")
         
@@ -200,116 +152,167 @@ async def setup_python_environment_subprocess(container_id):
 
 @app.websocket("/ws/term/{container_id}")
 async def websocket_terminal(websocket: WebSocket, container_id: str):
-    """WebSocket endpoint for terminal communication"""
+    """WebSocket endpoint for terminal communication (local shell)"""
     try:
-        print(f"WebSocket connection attempt for container: {container_id}")
+        print(f"WebSocket connection attempt for: {container_id}")
         await websocket.accept()
-        print(f"WebSocket accepted for container: {container_id}")
+        print(f"WebSocket accepted for: {container_id}")
     except Exception as e:
         print(f"Error accepting WebSocket: {e}")
         return
     
-    if not docker_available:
-        try:
-            await websocket.send_text("Error: Docker is not available")
-            await websocket.close()
-        except:
-            pass
-        return
-    
     try:
-        # Check if container exists and is running
-        result = run_docker_command(["inspect", "--format", "{{.State.Running}}", container_id])
-        if not result or result.returncode != 0:
-            await websocket.send_text(f"Error: Container {container_id} not found or not running\r\n")
+        # Extract project_id from container_id
+        project_id = container_id.replace("local-", "")
+        project_dir = SANDBOX_BASE / project_id
+        workspace_dir = project_dir / "workspace"
+        
+        if not workspace_dir.exists():
+            await websocket.send_text(f"Error: Workspace not found\r\n")
             await websocket.close()
             return
         
-        if result.stdout.strip() != "true":
-            await websocket.send_text(f"Error: Container {container_id} is not running\r\n")
-            await websocket.close()
-            return
+        print(f"Creating shell process for workspace: {workspace_dir}")
         
-        print(f"Creating shell process for container: {container_id}")
+        # Create interactive shell with PTY for better terminal behavior
+        if platform.system() != "Windows":
+            import pty
+            import os as os_module
+            import fcntl
+            
+            # Create a pseudo-terminal
+            master_fd, slave_fd = pty.openpty()
+            
+            # Start shell process with PTY
+            process = subprocess.Popen(
+                ['/bin/bash', '-i'],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=str(workspace_dir),
+                env={
+                    **os.environ,
+                    'TERM': 'xterm-256color',
+                    'PS1': '\\w $ ',
+                    'PYTHONUNBUFFERED': '1'
+                },
+                preexec_fn=os_module.setsid
+            )
+            
+            # Close slave fd in parent process
+            os_module.close(slave_fd)
+            
+            # Set master fd to non-blocking
+            fcntl.fcntl(master_fd, fcntl.F_SETFL, os_module.O_NONBLOCK)
+        else:
+            # Windows fallback (no PTY support)
+            process = subprocess.Popen(
+                ['cmd.exe'],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=0,
+                cwd=str(workspace_dir),
+                env={
+                    **os.environ,
+                    'TERM': 'xterm-256color',
+                    'PYTHONUNBUFFERED': '1'
+                }
+            )
+            master_fd = None
         
-        # Create interactive shell process
-        process = subprocess.Popen(
-            ['docker', 'exec', '-i', container_id, '/bin/bash'],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=0,
-            env={'TERM': 'xterm-256color', 'COLUMNS': '80', 'LINES': '24', 'PS1': '$ ', 'HOME': '/root', 'USER': 'root', 'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'}
-        )
+        # Send welcome message
+        welcome_msg = f"Web IDE Terminal - Working directory: {workspace_dir}\r\n"
+        if (workspace_dir / "venv").exists():
+            welcome_msg += "Virtual environment available. Activate with: source venv/bin/activate\r\n"
+        await websocket.send_text(welcome_msg)
         
         # Handle bidirectional communication
-        async def read_from_container():
+        async def read_from_process():
             try:
                 while True:
                     if process.poll() is not None:
                         print("Process terminated")
                         break
                     
-                    # Read from container stdout
+                    # Read from PTY master or process stdout
                     try:
-                        data = process.stdout.read(1)
-                        if data:
-                            print(f"Read from container: {repr(data)}")
+                        if master_fd is not None:
+                            # Reading from PTY (non-blocking)
                             try:
-                                await websocket.send_text(data)
-                                print(f"Sent to WebSocket: {repr(data)}")
-                            except WebSocketDisconnect:
-                                print("WebSocket disconnected during read")
-                                break
-                            except Exception as e:
-                                print(f"Error sending to WebSocket: {e}")
-                                break
+                                data = os.read(master_fd, 1024).decode('utf-8', errors='replace')
+                                if data:
+                                    try:
+                                        await websocket.send_text(data)
+                                    except WebSocketDisconnect:
+                                        print("WebSocket disconnected during read")
+                                        break
+                                    except Exception as e:
+                                        print(f"Error sending to WebSocket: {e}")
+                                        break
+                            except BlockingIOError:
+                                # No data available, wait a bit
+                                await asyncio.sleep(0.01)
                         else:
-                            await asyncio.sleep(0.01)
+                            # Windows: read from process stdout
+                            data = process.stdout.read(1)
+                            if data:
+                                try:
+                                    await websocket.send_text(data)
+                                except WebSocketDisconnect:
+                                    print("WebSocket disconnected during read")
+                                    break
+                                except Exception as e:
+                                    print(f"Error sending to WebSocket: {e}")
+                                    break
+                            else:
+                                await asyncio.sleep(0.01)
                     except Exception as e:
-                        print(f"Error reading from container: {e}")
+                        print(f"Error reading from process: {e}")
                         break
             except WebSocketDisconnect:
                 print("WebSocket disconnected during read")
             except Exception as e:
-                print(f"Error reading from container: {e}")
+                print(f"Error reading from process: {e}")
         
-        async def write_to_container():
+        async def write_to_process():
             try:
                 while True:
                     data = await websocket.receive_text()
-                    print(f"Received data from WebSocket: {repr(data)}")
                     
-                    # Handle resize messages (for future use)
+                    # Handle resize messages
                     try:
                         resize_data = json.loads(data)
                         if resize_data.get('type') == 'resize':
-                            # For now, just acknowledge resize
                             print(f"Resize request: {resize_data.get('cols')}x{resize_data.get('rows')}")
+                            # TODO: Implement terminal resize with TIOCSWINSZ
                             continue
                     except (json.JSONDecodeError, KeyError):
                         pass
                     
-                    # Write data to container stdin
+                    # Write data to PTY master or process stdin
                     try:
-                        print(f"Writing to container stdin: {repr(data)}")
-                        process.stdin.write(data)
-                        process.stdin.flush()
-                        print(f"Successfully wrote to container stdin")
+                        if master_fd is not None:
+                            # Writing to PTY
+                            os.write(master_fd, data.encode('utf-8'))
+                        else:
+                            # Windows: write to process stdin
+                            process.stdin.write(data)
+                            process.stdin.flush()
                     except Exception as e:
-                        print(f"Error writing to container: {e}")
+                        print(f"Error writing to process: {e}")
                         break
             except WebSocketDisconnect:
                 print("WebSocket disconnected during write")
             except Exception as e:
-                print(f"Error writing to container: {e}")
+                print(f"Error writing to process: {e}")
         
         # Run both tasks concurrently
         try:
             await asyncio.gather(
-                read_from_container(),
-                write_to_container(),
+                read_from_process(),
+                write_to_process(),
                 return_exceptions=True
             )
         except Exception as e:
@@ -330,6 +333,11 @@ async def websocket_terminal(websocket: WebSocket, container_id: str):
             if 'process' in locals() and process.poll() is None:
                 process.terminate()
                 process.wait(timeout=5)
+        except:
+            pass
+        try:
+            if 'master_fd' in locals() and master_fd is not None:
+                os.close(master_fd)
         except:
             pass
         try:
@@ -418,19 +426,11 @@ async def write_file(project_id: str, file_path: str, content: str):
 
 @app.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str):
-    """Stop container and cleanup project files"""
+    """Cleanup project files"""
     try:
-        # Stop and remove container if it exists
-        if project_id in active_containers and docker_available:
-            container_id = active_containers[project_id]
-            try:
-                # Stop container
-                run_docker_command(["stop", container_id])
-                # Remove container
-                run_docker_command(["rm", container_id])
-            except Exception:
-                pass
-            del active_containers[project_id]
+        # Remove from active processes if it exists
+        if project_id in active_processes:
+            del active_processes[project_id]
         
         # Clean up project directory
         project_dir = SANDBOX_BASE / project_id
@@ -444,29 +444,16 @@ async def delete_project(project_id: str):
 
 @app.get("/api/projects/{project_id}/status")
 async def get_project_status(project_id: str):
-    """Get project and container status"""
+    """Get project status"""
     project_dir = SANDBOX_BASE / project_id
     workspace_dir = project_dir / "workspace"
     
     status = {
         "project_id": project_id,
         "workspace_exists": workspace_dir.exists(),
-        "container_running": False,
-        "container_id": None
+        "container_running": project_id in active_processes,
+        "container_id": active_processes.get(project_id)
     }
-    
-    if project_id in active_containers and docker_available:
-        container_id = active_containers[project_id]
-        try:
-            # Check container status using subprocess
-            result = run_docker_command(["inspect", "--format", "{{.State.Running}}", container_id])
-            if result and result.returncode == 0:
-                status["container_running"] = result.stdout.strip() == "true"
-                status["container_id"] = container_id
-            else:
-                del active_containers[project_id]
-        except Exception:
-            del active_containers[project_id]
     
     return status
 
